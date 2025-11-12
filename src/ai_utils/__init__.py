@@ -35,55 +35,82 @@ def clean_text(text: str) -> str:
     return text
 
 
-def safe_truncate(text: str, max_length: int, suffix: str = "...") -> str:
+def safe_truncate_tokens(text: str, max_tokens: int) -> str:
     """
-    Safely truncate text to a maximum length, adding a suffix if truncated.
-    
-    Ensures truncation happens at word boundaries when possible to avoid
-    cutting words in the middle.
-    
+    Safely truncate text to a maximum number of tokens without splitting words.
+
+    Uses whitespace-based tokenization as an approximation. The function ensures
+    that words are not cut in the middle by truncating at word boundaries.
+
     Args:
         text: The input text to truncate
-        max_length: Maximum length of the result (including suffix)
-        suffix: String to append when text is truncated (default: "...")
-        
+        max_tokens: Maximum number of tokens (approximately word-based)
+
     Returns:
-        Truncated text with suffix if needed
-        
+        Truncated text that respects word boundaries
+
     Examples:
-        >>> safe_truncate("Hello World!", 10)
-        'Hello...'
-        >>> safe_truncate("Short", 10)
+        >>> safe_truncate_tokens("Hello World! This is a test.", 3)
+        'Hello World! This'
+        >>> safe_truncate_tokens("Short", 10)
         'Short'
-        >>> safe_truncate("Hello World!", 20)
-        'Hello World!'
+        >>> safe_truncate_tokens("One two three four five", 3)
+        'One two three'
     """
     if not isinstance(text, str):
         raise TypeError(f"Expected str, got {type(text).__name__}")
-    
-    if not isinstance(max_length, int) or max_length < 0:
-        raise ValueError(f"max_length must be a non-negative integer")
-    
-    if len(text) <= max_length:
+
+    if not isinstance(max_tokens, int) or max_tokens < 0:
+        raise ValueError(f"max_tokens must be a non-negative integer")
+
+    if not text or max_tokens == 0:
+        return ""
+
+    # Split text into tokens (words) while preserving whitespace information
+    tokens = text.split()
+
+    # If we have fewer tokens than the limit, return original text
+    if len(tokens) <= max_tokens:
         return text
-    
-    # Account for suffix length
-    truncate_at = max_length - len(suffix)
-    
-    if truncate_at <= 0:
-        # If suffix is too long, just return the suffix truncated
-        return suffix[:max_length]
-    
-    # Truncate to max length
-    truncated = text[:truncate_at]
-    
-    # Try to truncate at word boundary
-    last_space = truncated.rfind(' ')
-    if last_space > 0:
-        # If we found a space, truncate there for cleaner cut
-        truncated = truncated[:last_space]
-    
-    return truncated + suffix
+
+    # Take only the first max_tokens words and join them back
+    truncated_tokens = tokens[:max_tokens]
+    return ' '.join(truncated_tokens)
 
 
-__all__ = ["clean_text", "safe_truncate"]
+def merge_context_snippets(snippets: list[str], separator: str = "\n\n") -> str:
+    """
+    Merge multiple context snippets into a single string with a separator.
+
+    Filters out empty or whitespace-only snippets and joins the remaining
+    snippets with the specified separator.
+
+    Args:
+        snippets: List of text snippets to merge
+        separator: String to use between snippets (default: double newline)
+
+    Returns:
+        Merged string with all non-empty snippets separated by the separator
+
+    Examples:
+        >>> merge_context_snippets(["First snippet", "Second snippet"])
+        'First snippet\\n\\nSecond snippet'
+        >>> merge_context_snippets(["Hello", "", "World"], separator=" | ")
+        'Hello | World'
+        >>> merge_context_snippets([], separator="---")
+        ''
+    """
+    if not isinstance(snippets, list):
+        raise TypeError(f"Expected list, got {type(snippets).__name__}")
+
+    if not isinstance(separator, str):
+        raise TypeError(f"Expected str for separator, got {type(separator).__name__}")
+
+    # Filter out empty or whitespace-only snippets
+    non_empty_snippets = [s.strip() for s in snippets if isinstance(s, str) and s.strip()]
+
+    # Join with the separator
+    return separator.join(non_empty_snippets)
+
+
+__all__ = ["clean_text", "safe_truncate_tokens", "merge_context_snippets"]
