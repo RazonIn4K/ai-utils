@@ -6,6 +6,14 @@ __version__ = "0.1.0"
 
 import re
 
+# Import LLMClient if requests is available
+try:
+    from .llm_client import LLMClient
+    _has_llm_client = True
+except ImportError:
+    _has_llm_client = False
+    LLMClient = None  # type: ignore
+
 
 def clean_text(text: str) -> str:
     """
@@ -332,4 +340,5 @@ __all__ = [
     "merge_context_snippets",
     "split_into_chunks",
     "summarise_text",
+    "LLMClient",
 ]

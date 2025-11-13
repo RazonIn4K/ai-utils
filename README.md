@@ -30,6 +30,7 @@ from ai_utils import (
     merge_context_snippets,
     split_into_chunks,
     summarise_text,
+    LLMClient,
 )
 ```
 
@@ -342,8 +343,171 @@ The key benefits of this approach:
 - **Efficient**: Only splits paragraphs when absolutely necessary
 - **Predictable**: Each chunk respects the token limit, preventing API errors
 
+## Using the LLMClient
+
+The `LLMClient` class provides a robust wrapper for OpenAI-compatible API endpoints with automatic retry logic and comprehensive error handling.
+
+### Configuration
+
+The client reads configuration from environment variables:
+
+```bash
+export LLM_BASE_URL="https://api.openai.com/v1"
+export LLM_MODEL="gpt-4"
+export LLM_API_KEY="your-api-key-here"
+```
+
+You can also override these settings when creating the client:
+
+```python
+from ai_utils import LLMClient
+
+# Using environment variables
+client = LLMClient()
+
+# Or override specific settings
+client = LLMClient(
+    base_url="https://api.anthropic.com/v1",
+    model="claude-3-sonnet-20240229",
+    api_key="your-key-here"
+)
+```
+
+### Basic usage
+
+```python
+from ai_utils import LLMClient
+
+# Initialize the client
+client = LLMClient()
+
+# Generate a response
+response = client.generate("What is the capital of France?")
+print(response)
+# Output: "The capital of France is Paris."
+
+# With additional parameters
+response = client.generate(
+    "Explain machine learning in simple terms",
+    temperature=0.7,
+    max_tokens=200
+)
+print(response)
+```
+
+### Retry logic and error handling
+
+The client automatically retries failed requests with exponential backoff:
+
+```python
+import logging
+from ai_utils import LLMClient
+
+# Enable logging to see retry attempts
+logging.basicConfig(level=logging.INFO)
+
+client = LLMClient(max_retries=5, initial_retry_delay=2.0)
+
+try:
+    response = client.generate("Your prompt here")
+    print(response)
+except Exception as e:
+    print(f"All retries failed: {e}")
+```
+
+### Processing chunks with LLMClient
+
+Combine chunking with LLM processing for long documents:
+
+```python
+from ai_utils import split_into_chunks, estimate_token_count, LLMClient
+import os
+
+# Set up environment
+os.environ['LLM_BASE_URL'] = 'https://api.openai.com/v1'
+os.environ['LLM_MODEL'] = 'gpt-4'
+os.environ['LLM_API_KEY'] = 'your-api-key'
+
+# Initialize client
+client = LLMClient()
+
+# Long document to process
+long_document = """
+[Your long transcript or article with many paragraphs...]
+"""
+
+# Split into manageable chunks
+chunks = split_into_chunks(long_document, max_tokens=2000)
+
+print(f"Processing {len(chunks)} chunks...")
+
+# Process each chunk
+summaries = []
+for i, chunk in enumerate(chunks, 1):
+    print(f"\nProcessing chunk {i}/{len(chunks)} ({estimate_token_count(chunk)} tokens)...")
+
+    try:
+        summary = client.generate(
+            f"Summarize the following text concisely:\n\n{chunk}",
+            temperature=0.3,
+            max_tokens=150
+        )
+        summaries.append(summary)
+        print(f"✓ Chunk {i} summarized")
+    except Exception as e:
+        print(f"✗ Chunk {i} failed: {e}")
+        summaries.append(f"[Error processing chunk {i}]")
+
+# Combine all summaries
+final_summary = "\n\n".join(summaries)
+print("\n" + "="*50)
+print("FINAL SUMMARY:")
+print(final_summary)
+```
+
+### Working with different LLM providers
+
+The client works with any OpenAI-compatible API:
+
+```python
+from ai_utils import LLMClient
+
+# OpenAI
+openai_client = LLMClient(
+    base_url="https://api.openai.com/v1",
+    model="gpt-4-turbo-preview",
+    api_key=os.environ.get("OPENAI_API_KEY")
+)
+
+# Azure OpenAI
+azure_client = LLMClient(
+    base_url="https://your-resource.openai.azure.com/openai/deployments",
+    model="gpt-4",
+    api_key=os.environ.get("AZURE_OPENAI_KEY")
+)
+
+# Local model (e.g., via LM Studio, Ollama with OpenAI compatibility)
+local_client = LLMClient(
+    base_url="http://localhost:1234/v1",
+    model="local-model",
+    api_key="not-needed"  # Local models often don't need a key
+)
+
+# Use any client the same way
+response = openai_client.generate("Hello!")
+```
+
+### Best practices
+
+- **Set appropriate timeouts**: The default timeout is 60 seconds. Adjust if needed for longer requests.
+- **Handle rate limits**: The client automatically retries on 429 errors with exponential backoff.
+- **Monitor costs**: Use `estimate_token_count()` to estimate usage before making API calls.
+- **Log errors**: Enable logging to debug issues: `logging.basicConfig(level=logging.INFO)`
+- **Secure API keys**: Never commit API keys to version control. Always use environment variables or secure vaults.
+
 ## Features
 
+### Text Processing
 - **clean_text**: Normalizes whitespace, removes extra spaces, newlines, and tabs
 - **estimate_token_count**: Approximates token count using whitespace splitting (for chunking, not billing)
 - **safe_truncate_tokens**: Intelligently truncates text to a token limit without splitting words
@@ -351,9 +515,21 @@ The key benefits of this approach:
 - **split_into_chunks**: Intelligently divides long text into chunks while preserving paragraph structure
 - **summarise_text**: Reduces text length using sentence-based heuristics (keeps first/last sentences)
 
+### LLM Integration
+- **LLMClient**: Robust wrapper for OpenAI-compatible APIs with automatic retry logic, exponential backoff, and comprehensive error handling
+
 ## Requirements
 
 - Python >= 3.8
+- `requests` (optional, required for LLMClient only)
+
+To install with LLM support:
+```bash
+pip install requests
+# or
+pip install git+https://github.com/RazonIn4K/ai-utils.git
+pip install requests
+```
 
 ## License
 
