@@ -12,7 +12,7 @@ authors = [
     {name = "RazonIn4K"}
 ]
 license = {text = "MIT"}
-keywords = ["ai", "utilities", "text-processing", "nlp"]
+keywords = ["ai", "utilities", "text-processing", "nlp", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,6 +26,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Text Processing",
 ]
+
+[project.optional-dependencies]
+llm = ["requests>=2.25.0"]
 
 [project.urls]
 Homepage = "https://github.com/RazonIn4K/ai-utils"
