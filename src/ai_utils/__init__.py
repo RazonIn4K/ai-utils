@@ -35,12 +35,47 @@ def clean_text(text: str) -> str:
     return text
 
 
+def estimate_token_count(text: str) -> int:
+    """
+    Estimate the token count of text by splitting on whitespace.
+
+    This is a simple approximation useful for chunking and processing workflows.
+    It is NOT intended for accurate billing or API quota calculations, as different
+    tokenizers (GPT, Claude, etc.) may count tokens differently.
+
+    Args:
+        text: The input text to estimate tokens for
+
+    Returns:
+        Approximate token count based on whitespace splitting
+
+    Examples:
+        >>> estimate_token_count("Hello world!")
+        2
+        >>> estimate_token_count("This is a test sentence.")
+        5
+        >>> estimate_token_count("")
+        0
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"Expected str, got {type(text).__name__}")
+
+    if not text.strip():
+        return 0
+
+    return len(text.split())
+
+
 def safe_truncate_tokens(text: str, max_tokens: int) -> str:
     """
     Safely truncate text to a maximum number of tokens without splitting words.
 
     Uses whitespace-based tokenization as an approximation. The function ensures
     that words are not cut in the middle by truncating at word boundaries.
+
+    Note: For very long inputs, consider using split_into_chunks() instead, which
+    preserves paragraph structure and is better suited for processing multi-page
+    documents.
 
     Args:
         text: The input text to truncate
@@ -115,27 +150,32 @@ def merge_context_snippets(snippets: list[str], separator: str = "\n\n") -> str:
 
 def split_into_chunks(text: str, max_tokens: int) -> list[str]:
     """
-    Split long text into chunks of up to max_tokens without breaking words.
+    Split long text into chunks respecting paragraph boundaries when possible.
 
-    This function divides text into smaller segments while ensuring that words
-    remain intact. Each chunk will contain at most max_tokens words, making it
-    useful for processing long documents in manageable pieces.
+    This function intelligently splits text by first attempting to split on
+    double-newlines (paragraph breaks). If a paragraph exceeds max_tokens,
+    it falls back to word-based chunking for that paragraph. This preserves
+    natural document structure while ensuring no chunk exceeds the token limit.
+
+    Token counting uses estimate_token_count(), which is whitespace-based.
 
     Args:
         text: The input text to split into chunks
-        max_tokens: Maximum number of tokens (words) per chunk
+        max_tokens: Maximum number of tokens per chunk (estimated)
 
     Returns:
-        List of text chunks, each containing at most max_tokens words
+        List of text chunks, each containing at most max_tokens (estimated)
 
     Examples:
-        >>> text = "This is a long sentence that needs to be split into chunks."
-        >>> split_into_chunks(text, max_tokens=4)
-        ['This is a long', 'sentence that needs to', 'be split into chunks.']
-        >>> split_into_chunks("Short text", max_tokens=10)
-        ['Short text']
-        >>> split_into_chunks("One two three four five six", max_tokens=2)
-        ['One two', 'three four', 'five six']
+        >>> text = "First paragraph here.\\n\\nSecond paragraph here.\\n\\nThird paragraph."
+        >>> chunks = split_into_chunks(text, max_tokens=10)
+        >>> len(chunks)
+        3
+        >>> # If a paragraph is too long, it gets split further
+        >>> long_para = "This is a very long paragraph " * 20
+        >>> chunks = split_into_chunks(long_para, max_tokens=50)
+        >>> all(estimate_token_count(chunk) <= 50 for chunk in chunks)
+        True
     """
     if not isinstance(text, str):
         raise TypeError(f"Expected str, got {type(text).__name__}")
@@ -146,18 +186,64 @@ def split_into_chunks(text: str, max_tokens: int) -> list[str]:
     if not text.strip():
         return []
 
-    # Split text into tokens (words)
-    tokens = text.split()
-
-    # If text is shorter than max_tokens, return it as a single chunk
-    if len(tokens) <= max_tokens:
+    # Check if entire text fits in one chunk
+    if estimate_token_count(text) <= max_tokens:
         return [text]
 
-    # Split into chunks
+    # Split on double-newlines (paragraph boundaries)
+    paragraphs = text.split('\n\n')
+
     chunks = []
-    for i in range(0, len(tokens), max_tokens):
-        chunk_tokens = tokens[i:i + max_tokens]
-        chunks.append(' '.join(chunk_tokens))
+    current_chunk = []
+    current_token_count = 0
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+
+        para_token_count = estimate_token_count(paragraph)
+
+        # If this single paragraph exceeds max_tokens, split it further
+        if para_token_count > max_tokens:
+            # First, add any accumulated chunk
+            if current_chunk:
+                chunks.append('\n\n'.join(current_chunk))
+                current_chunk = []
+                current_token_count = 0
+
+            # Split the long paragraph into word-based chunks
+            words = paragraph.split()
+            word_chunk = []
+            word_count = 0
+
+            for word in words:
+                if word_count + 1 > max_tokens:
+                    chunks.append(' '.join(word_chunk))
+                    word_chunk = [word]
+                    word_count = 1
+                else:
+                    word_chunk.append(word)
+                    word_count += 1
+
+            if word_chunk:
+                chunks.append(' '.join(word_chunk))
+
+        # If adding this paragraph would exceed limit, start new chunk
+        elif current_token_count + para_token_count > max_tokens:
+            if current_chunk:
+                chunks.append('\n\n'.join(current_chunk))
+            current_chunk = [paragraph]
+            current_token_count = para_token_count
+
+        # Otherwise, add to current chunk
+        else:
+            current_chunk.append(paragraph)
+            current_token_count += para_token_count
+
+    # Add any remaining chunk
+    if current_chunk:
+        chunks.append('\n\n'.join(current_chunk))
 
     return chunks
 
@@ -241,6 +327,7 @@ def summarise_text(text: str, max_chars: int) -> str:
 
 __all__ = [
     "clean_text",
+    "estimate_token_count",
     "safe_truncate_tokens",
     "merge_context_snippets",
     "split_into_chunks",

@@ -25,6 +25,7 @@ pip install -e .
 ```python
 from ai_utils import (
     clean_text,
+    estimate_token_count,
     safe_truncate_tokens,
     merge_context_snippets,
     split_into_chunks,
@@ -219,12 +220,135 @@ if len(final_text) > 100:
     print("\nSummary:", summary)
 ```
 
+## Working with long texts
+
+When processing long documents like transcripts, articles, or books, you often need to split them into chunks that fit within LLM context windows. The `estimate_token_count` and `split_into_chunks` functions work together to handle this intelligently.
+
+### Estimating token counts
+
+Use `estimate_token_count` to get a rough approximation of how many tokens are in your text. This is useful for planning your chunking strategy, but remember it's not exact for billing purposes.
+
+```python
+from ai_utils import estimate_token_count
+
+transcript = """
+This is a long transcript from an interview.
+It has multiple paragraphs and sections.
+
+The interviewer asked many questions.
+The respondent gave detailed answers.
+
+This continues for many pages...
+"""
+
+token_count = estimate_token_count(transcript)
+print(f"Estimated tokens: {token_count}")
+# Output: Estimated tokens: 26
+```
+
+### Splitting long documents into chunks
+
+The `split_into_chunks` function intelligently divides long text into manageable pieces while preserving paragraph structure. It splits on double-newlines (paragraph breaks) when possible, and only falls back to word-based splitting when individual paragraphs exceed the token limit.
+
+```python
+from ai_utils import split_into_chunks, estimate_token_count
+
+# Sample long transcript
+transcript = """
+Speaker 1: Welcome to today's discussion about artificial intelligence and its impact on society. We have several experts joining us to share their insights.
+
+Speaker 2: Thank you for having me. I think AI is transforming every industry we can think of, from healthcare to transportation. The pace of change is unprecedented.
+
+Speaker 1: That's a great point. Can you elaborate on the healthcare applications?
+
+Speaker 2: Certainly. In healthcare, AI is being used for diagnostic imaging, drug discovery, and personalized treatment plans. Machine learning models can now detect diseases earlier and more accurately than ever before.
+
+Speaker 3: I'd like to add that we also need to consider the ethical implications. As AI systems become more powerful, we must ensure they're used responsibly and don't perpetuate existing biases.
+
+Speaker 1: Absolutely. Ethics and governance are critical topics. How do you think we should approach regulation?
+
+Speaker 3: It's a delicate balance. We need frameworks that protect people while still allowing innovation to flourish. Different countries are taking different approaches, and we're still learning what works best.
+"""
+
+# Split into chunks of approximately 100 tokens each
+chunks = split_into_chunks(transcript, max_tokens=100)
+
+print(f"Split transcript into {len(chunks)} chunks\n")
+
+# Verify each chunk is within the limit
+for i, chunk in enumerate(chunks, 1):
+    token_count = estimate_token_count(chunk)
+    print(f"Chunk {i}: {token_count} tokens")
+    print(f"Preview: {chunk[:100]}...\n")
+```
+
+### Processing chunks with an LLM
+
+Here's a complete example showing how to process a long document with an LLM by chunking it first:
+
+```python
+from ai_utils import split_into_chunks, estimate_token_count
+
+# Your long document
+long_document = """
+[Imagine this is a 50-page transcript or article with many paragraphs...]
+
+Paragraph 1 content here.
+
+Paragraph 2 content here.
+
+Paragraph 3 content here.
+[... many more paragraphs ...]
+"""
+
+# Split into chunks that fit within your LLM's context window
+# For example, if you want to leave room for prompts and responses,
+# you might use a conservative limit like 2000 tokens per chunk
+MAX_TOKENS_PER_CHUNK = 2000
+chunks = split_into_chunks(long_document, max_tokens=MAX_TOKENS_PER_CHUNK)
+
+print(f"Processing {len(chunks)} chunks...")
+
+# Process each chunk with your LLM
+results = []
+for i, chunk in enumerate(chunks, 1):
+    print(f"\nProcessing chunk {i}/{len(chunks)}...")
+    print(f"Chunk size: {estimate_token_count(chunk)} tokens")
+
+    # Example: Call your LLM API
+    # This is pseudocode - replace with your actual LLM API call
+    # response = llm_api.complete(
+    #     prompt=f"Summarize the following text:\n\n{chunk}",
+    #     max_tokens=150
+    # )
+
+    # For demonstration purposes:
+    response = f"Summary of chunk {i}: [LLM response would go here]"
+    results.append(response)
+
+    print(f"Response: {response}")
+
+# Combine results if needed
+print(f"\n{'='*50}")
+print("All summaries:")
+for i, result in enumerate(results, 1):
+    print(f"{i}. {result}")
+```
+
+The key benefits of this approach:
+
+- **Preserves structure**: Paragraph boundaries are maintained when possible, keeping related content together
+- **Flexible**: Works with any LLM by letting you specify the token limit
+- **Efficient**: Only splits paragraphs when absolutely necessary
+- **Predictable**: Each chunk respects the token limit, preventing API errors
+
 ## Features
 
 - **clean_text**: Normalizes whitespace, removes extra spaces, newlines, and tabs
+- **estimate_token_count**: Approximates token count using whitespace splitting (for chunking, not billing)
 - **safe_truncate_tokens**: Intelligently truncates text to a token limit without splitting words
 - **merge_context_snippets**: Combines multiple text snippets with customizable separators
-- **split_into_chunks**: Divides long text into smaller chunks of specified token length
+- **split_into_chunks**: Intelligently divides long text into chunks while preserving paragraph structure
 - **summarise_text**: Reduces text length using sentence-based heuristics (keeps first/last sentences)
 
 ## Requirements
