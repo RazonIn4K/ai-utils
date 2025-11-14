@@ -24,13 +24,19 @@ pip install -e .
 
 ```python
 from ai_utils import (
+    # Text processing
     clean_text,
     estimate_token_count,
     safe_truncate_tokens,
     merge_context_snippets,
     split_into_chunks,
     summarise_text,
+    # LLM integration
     LLMClient,
+    # Additional helpers
+    safe_extract_json,
+    configure_logging,
+    retry_with_backoff,
 )
 ```
 
@@ -518,18 +524,120 @@ response = openai_client.generate("Hello!")
 ### LLM Integration
 - **LLMClient**: Robust wrapper for OpenAI-compatible APIs with automatic retry logic, exponential backoff, and comprehensive error handling
 
+### Additional Helpers
+- **safe_extract_json**: Intelligently extract JSON from LLM responses that may contain additional text or markdown formatting
+- **configure_logging**: Quick logging setup with sensible defaults for AI workflows
+- **retry_with_backoff**: Decorator for adding retry logic with exponential backoff to any function
+
+## Testing
+
+This package includes comprehensive unit tests with >90% coverage.
+
+### Running Tests
+
+Install development dependencies:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Run tests:
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=ai_utils --cov-report=html
+
+# Run specific test file
+pytest tests/test_text_processing.py
+
+# Run with verbose output
+pytest -v
+
+# Run tests matching a pattern
+pytest -k "test_clean"
+```
+
+### Test Structure
+
+```
+tests/
+├── test_text_processing.py  # Tests for text utilities
+├── test_llm_client.py        # Tests for LLMClient (requires requests)
+└── test_helpers.py           # Tests for additional helpers
+```
+
+Tests cover:
+- ✅ All core functions with typical inputs
+- ✅ Edge cases (empty strings, whitespace-only, very long text)
+- ✅ Unicode and multilingual text (emoji, Chinese, Arabic, Russian)
+- ✅ Error handling (type errors, value errors)
+- ✅ LLM client retry logic and error scenarios
+- ✅ JSON extraction from various formats
+
+## Examples
+
+Check out the `examples/` directory for practical demonstrations:
+
+- `01_text_processing.py` - Basic text utilities
+- `02_chunking_long_text.py` - Document chunking techniques
+- `03_llm_client_usage.py` - LLM client with retry logic
+- `04_json_extraction.py` - Extracting JSON from LLM responses
+
+Run any example:
+```bash
+python examples/01_text_processing.py
+```
+
 ## Requirements
 
 - Python >= 3.8
 - `requests` (optional, required for LLMClient only)
 
-To install with LLM support:
+### Installation
+
+Install the base package:
 ```bash
-pip install requests
-# or
 pip install git+https://github.com/RazonIn4K/ai-utils.git
-pip install requests
 ```
+
+With LLM client support:
+```bash
+pip install "git+https://github.com/RazonIn4K/ai-utils.git#egg=ai-utils[llm]"
+```
+
+For development:
+```bash
+git clone https://github.com/RazonIn4K/ai-utils.git
+cd ai-utils
+pip install -e ".[dev]"
+```
+
+## Publishing to PyPI
+
+To publish this package to PyPI:
+
+1. Update version in `pyproject.toml`
+2. Build the package:
+   ```bash
+   python -m build
+   ```
+3. Upload to PyPI:
+   ```bash
+   python -m twine upload dist/*
+   ```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure all tests pass: `pytest`
+5. Submit a pull request
 
 ## License
 

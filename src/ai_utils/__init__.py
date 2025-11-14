@@ -14,6 +14,9 @@ except ImportError:
     _has_llm_client = False
     LLMClient = None  # type: ignore
 
+# Import additional helpers
+from .helpers import safe_extract_json, configure_logging, retry_with_backoff
+
 
 def clean_text(text: str) -> str:
     """
@@ -334,11 +337,17 @@ def summarise_text(text: str, max_chars: int) -> str:
 
 
 __all__ = [
+    # Text processing
     "clean_text",
     "estimate_token_count",
     "safe_truncate_tokens",
     "merge_context_snippets",
     "split_into_chunks",
     "summarise_text",
+    # LLM integration
     "LLMClient",
+    # Additional helpers
+    "safe_extract_json",
+    "configure_logging",
+    "retry_with_backoff",
 ]
