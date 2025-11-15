@@ -4,7 +4,11 @@ import json
 import logging
 import re
 import sys
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
+
+
+class _RetryResultTrigger(Exception):
+    """Internal exception raised when retry_on_result requests a retry."""
 
 
 def safe_extract_json(
@@ -212,70 +216,89 @@ def configure_logging(
 
 
 def retry_with_backoff(
-    func,
+    func=None,
+    *,
     max_retries: int = 3,
     initial_delay: float = 1.0,
     backoff_factor: float = 2.0,
-    exceptions: tuple = (Exception,)
+    exceptions: tuple[type[Exception], ...] = (Exception,),
+    retry_on_result: Optional[Callable[[Any], bool]] = None,
 ):
     """
     Decorator for retrying a function with exponential backoff.
 
-    This is a simplified retry helper for quick use cases. For more complex
-    scenarios, consider using the LLMClient which has built-in retry logic.
+    Can be used as ``@retry_with_backoff(...)`` or ``retry_with_backoff(fn, ...)``.
+    For complex scenarios consider using :class:`LLMClient`, which integrates
+    configurable retry logic.
 
     Args:
-        func: Function to retry
-        max_retries: Maximum number of retry attempts (default: 3)
-        initial_delay: Initial delay in seconds (default: 1.0)
-        backoff_factor: Multiplier for delay after each retry (default: 2.0)
-        exceptions: Tuple of exceptions to catch and retry (default: (Exception,))
+        func: Function to wrap. When omitted this returns a decorator.
+        max_retries: Maximum number of retry attempts.
+        initial_delay: Initial delay in seconds before retrying.
+        backoff_factor: Multiplier applied to the delay after each retry.
+        exceptions: Tuple of exception classes that trigger a retry.
+        retry_on_result: Optional predicate that returns True when the
+            function result should trigger a retry even if no exception was
+            raised. Defaults to flagging string responses that contain the
+            word "error" (case-insensitive).
 
     Returns:
-        Wrapped function with retry logic
-
-    Examples:
-        >>> import time
-        >>> from ai_utils.helpers import retry_with_backoff
-        >>>
-        >>> @retry_with_backoff(max_retries=3, initial_delay=0.5)
-        ... def flaky_api_call():
-        ...     # Your API call here
-        ...     return "success"
-        >>>
-        >>> # Or use it directly
-        >>> def my_function():
-        ...     return "result"
-        >>> retried_func = retry_with_backoff(my_function, max_retries=5)
+        Wrapped function with retry logic or the decorator itself.
     """
+
     import functools
     import time
 
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        last_exception = None
+    def decorator(target_func):
+        result_checker = retry_on_result
 
-        for attempt in range(max_retries):
-            try:
-                return func(*args, **kwargs)
-            except exceptions as e:
-                last_exception = e
+        if result_checker is None:
+            def _default_checker(result: Any) -> bool:
+                return isinstance(result, str) and "error" in result.lower()
+
+            result_checker = _default_checker
+
+        @functools.wraps(target_func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    result = target_func(*args, **kwargs)
+                    if result_checker and result_checker(result):
+                        raise _RetryResultTrigger("Result triggered retry_with_backoff")
+                    return result
+                except exceptions as exc:  # type: ignore[misc]
+                    last_exception = exc
+                except _RetryResultTrigger as exc:
+                    last_exception = exc
+
+                if last_exception is None:
+                    continue
+
                 if attempt < max_retries - 1:
                     delay = initial_delay * (backoff_factor ** attempt)
                     logging.warning(
-                        f"Attempt {attempt + 1}/{max_retries} failed: {e}. "
+                        f"Attempt {attempt + 1}/{max_retries} failed: {last_exception}. "
                         f"Retrying in {delay:.2f}s..."
                     )
                     time.sleep(delay)
                 else:
                     logging.error(f"All {max_retries} retry attempts failed")
 
-        if last_exception:
-            raise last_exception
-        else:
+            if last_exception:
+                raise last_exception
             raise RuntimeError(f"Failed after {max_retries} attempts")
 
-    return wrapper
+        return wrapper
+
+    if func is None:
+        return decorator
+
+    if not callable(func):
+        raise TypeError("retry_with_backoff expects a callable or is used as a decorator")
+
+    return decorator(func)
 
 
 __all__ = [

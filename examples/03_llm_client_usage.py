@@ -11,6 +11,8 @@ Run: pip install ai-utils[llm]
 import os
 from ai_utils import LLMClient, split_into_chunks, estimate_token_count
 
+TOKEN_MODEL = "gpt-3.5-turbo"
+
 
 def example_basic_usage():
     """Basic LLM client usage."""
@@ -67,7 +69,7 @@ def example_processing_chunks():
     """
 
     # Split into chunks
-    chunks = split_into_chunks(document.strip(), max_tokens=50)
+    chunks = split_into_chunks(document.strip(), max_tokens=50, overlap_tokens=10)
 
     print(f"Document split into {len(chunks)} chunks\n")
 
@@ -76,7 +78,7 @@ def example_processing_chunks():
 
         summaries = []
         for i, chunk in enumerate(chunks, 1):
-            token_count = estimate_token_count(chunk)
+            token_count = estimate_token_count(chunk, model=TOKEN_MODEL)
             print(f"Processing chunk {i}/{len(chunks)} ({token_count} tokens)...")
 
             # In real usage, this would make actual API calls

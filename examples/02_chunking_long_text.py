@@ -7,6 +7,8 @@ while preserving paragraph structure.
 
 from ai_utils import split_into_chunks, estimate_token_count
 
+MODEL = "gpt-3.5-turbo"
+
 
 def main():
     print("=" * 60)
@@ -20,11 +22,11 @@ def main():
     simple_text = "Word1 Word2 Word3 Word4 Word5 Word6 Word7 Word8 Word9 Word10"
     chunks = split_into_chunks(simple_text, max_tokens=3)
 
-    print(f"Original text ({estimate_token_count(simple_text)} tokens):")
+    print(f"Original text ({estimate_token_count(simple_text, model=MODEL)} tokens):")
     print(simple_text)
     print(f"\nSplit into {len(chunks)} chunks (max 3 tokens each):")
     for i, chunk in enumerate(chunks, 1):
-        print(f"  Chunk {i} ({estimate_token_count(chunk)} tokens): {chunk}")
+        print(f"  Chunk {i} ({estimate_token_count(chunk, model=MODEL)} tokens): {chunk}")
 
     # Example 2: Paragraph-aware chunking
     print("\n2. PARAGRAPH-AWARE CHUNKING")
@@ -40,11 +42,11 @@ def main():
     Conclusion: Finally, we summarize our key points and recommendations.
     """
 
-    chunks = split_into_chunks(document.strip(), max_tokens=50)
+    chunks = split_into_chunks(document.strip(), max_tokens=50, overlap_tokens=10)
 
     print(f"Document with {len(chunks)} chunks:")
     for i, chunk in enumerate(chunks, 1):
-        tokens = estimate_token_count(chunk)
+        tokens = estimate_token_count(chunk, model=MODEL)
         preview = chunk[:60] + "..." if len(chunk) > 60 else chunk
         print(f"\nChunk {i} ({tokens} tokens):")
         print(f"  {preview}")
@@ -72,11 +74,11 @@ def main():
     """
 
     # Chunk for processing with an LLM (e.g., 100 token chunks)
-    chunks = split_into_chunks(transcript.strip(), max_tokens=100)
+    chunks = split_into_chunks(transcript.strip(), max_tokens=100, overlap_tokens=20)
 
     print(f"Transcript split into {len(chunks)} chunks for LLM processing:\n")
     for i, chunk in enumerate(chunks, 1):
-        tokens = estimate_token_count(chunk)
+        tokens = estimate_token_count(chunk, model=MODEL)
         lines = chunk.count('\n') + 1
         print(f"Chunk {i}: {tokens} tokens, {lines} lines")
         print(f"First line: {chunk.split(chr(10))[0][:50]}...")
@@ -91,7 +93,7 @@ def main():
 
     print(f"Long paragraph (100 words) split into {len(chunks)} chunks of max 20 tokens:")
     for i, chunk in enumerate(chunks, 1):
-        tokens = estimate_token_count(chunk)
+        tokens = estimate_token_count(chunk, model=MODEL)
         word_range = chunk.split()[0] + " ... " + chunk.split()[-1]
         print(f"  Chunk {i}: {tokens} tokens ({word_range})")
 
@@ -109,7 +111,7 @@ def main():
     ]
 
     for use_case, max_tokens in use_cases:
-        chunks = split_into_chunks(sample_doc, max_tokens=max_tokens)
+        chunks = split_into_chunks(sample_doc, max_tokens=max_tokens, overlap_tokens=100)
         print(f"{use_case:35s}: {len(chunks):2d} chunks of ~{max_tokens} tokens")
 
 

@@ -8,7 +8,11 @@ from ai_utils import (
     merge_context_snippets,
     split_into_chunks,
     summarise_text,
+    estimate_llm_cost,
 )
+
+
+DEFAULT_MODEL = "gpt-3.5-turbo"
 
 
 class TestCleanText:
@@ -59,39 +63,42 @@ class TestCleanText:
 class TestEstimateTokenCount:
     """Tests for estimate_token_count function."""
 
-    def test_basic_counting(self):
-        assert estimate_token_count("Hello world") == 2
+    def test_scales_with_length(self):
+        short_text = "Hello world"
+        long_text = "Hello world " * 20
+        assert estimate_token_count(long_text, model=DEFAULT_MODEL) > estimate_token_count(
+            short_text, model=DEFAULT_MODEL
+        )
 
-    def test_sentence_counting(self):
-        assert estimate_token_count("This is a test sentence.") == 5
+    def test_model_specific_heuristics(self):
+        text = "Token" * 50
+        gpt_estimate = estimate_token_count(text, model="gpt-3.5-turbo")
+        claude_estimate = estimate_token_count(text, model="claude-3-sonnet")
+        assert claude_estimate >= gpt_estimate
 
     def test_empty_string(self):
-        assert estimate_token_count("") == 0
+        assert estimate_token_count("", model=DEFAULT_MODEL) == 0
 
     def test_whitespace_only(self):
-        assert estimate_token_count("   \n\n\t   ") == 0
+        assert estimate_token_count("   \n\n\t   ", model=DEFAULT_MODEL) == 0
 
-    def test_single_word(self):
-        assert estimate_token_count("Hello") == 1
+    def test_multilingual_text(self):
+        text = "你好世界。这是第二句话。"
+        assert estimate_token_count(text, model=DEFAULT_MODEL) >= 2
 
-    def test_unicode_tokens(self):
-        # Each character/word counts as a token when space-separated
-        assert estimate_token_count("Hello 世界 test") == 3
-
-    def test_punctuation_attached(self):
-        # Punctuation attached to words counts as same token
-        assert estimate_token_count("Hello, world!") == 2
-
-    def test_multiple_spaces(self):
-        # Multiple spaces should still count correctly
-        assert estimate_token_count("word1    word2     word3") == 3
-
-    def test_newlines(self):
-        assert estimate_token_count("line1\nline2\nline3") == 3
+    def test_non_ascii_emoji(self):
+        text = "Hello 👋 World 🌍"
+        tokens = estimate_token_count(text, model=DEFAULT_MODEL)
+        # Each emoji should count toward the estimate
+        assert tokens >= 4
 
     def test_type_error(self):
         with pytest.raises(TypeError):
-            estimate_token_count(123)  # type: ignore
+            estimate_token_count(123, model=DEFAULT_MODEL)  # type: ignore
+
+    def test_invalid_model_name(self):
+        with pytest.raises(ValueError):
+            estimate_token_count("text", model="   ")
 
 
 class TestSafeTruncateTokens:
@@ -99,51 +106,57 @@ class TestSafeTruncateTokens:
 
     def test_basic_truncation(self):
         text = "This is a test sentence with many words"
-        result = safe_truncate_tokens(text, max_tokens=4)
+        result = safe_truncate_tokens(text, max_tokens=4, model=DEFAULT_MODEL)
         assert result == "This is a test"
+
+    def test_sentence_boundary_preference(self):
+        text = "First sentence. Second sentence is longer."
+        result = safe_truncate_tokens(text, max_tokens=3, model=DEFAULT_MODEL)
+        assert result == "First sentence."
 
     def test_no_truncation_needed(self):
         text = "Short text"
-        result = safe_truncate_tokens(text, max_tokens=10)
+        result = safe_truncate_tokens(text, max_tokens=10, model=DEFAULT_MODEL)
         assert result == text
 
     def test_exact_token_count(self):
         text = "One two three four five"
-        result = safe_truncate_tokens(text, max_tokens=5)
+        result = safe_truncate_tokens(text, max_tokens=5, model=DEFAULT_MODEL)
         assert result == text
 
     def test_empty_string(self):
-        assert safe_truncate_tokens("", max_tokens=10) == ""
+        assert safe_truncate_tokens("", max_tokens=10, model=DEFAULT_MODEL) == ""
 
     def test_zero_tokens(self):
-        assert safe_truncate_tokens("Hello world", max_tokens=0) == ""
-
-    def test_one_token(self):
-        result = safe_truncate_tokens("Hello world test", max_tokens=1)
-        assert result == "Hello"
+        assert safe_truncate_tokens("Hello world", max_tokens=0, model=DEFAULT_MODEL) == ""
 
     def test_unicode_text(self):
         text = "Hello 世界 test message"
-        result = safe_truncate_tokens(text, max_tokens=2)
+        result = safe_truncate_tokens(text, max_tokens=2, model=DEFAULT_MODEL)
         assert result == "Hello 世界"
 
-    def test_preserves_word_boundaries(self):
-        text = "This is a very long sentence"
-        result = safe_truncate_tokens(text, max_tokens=3)
-        assert result == "This is a"
-        assert "very" not in result
+    def test_multilingual_without_spaces(self):
+        text = "你好世界你好世界"
+        result = safe_truncate_tokens(text, max_tokens=1, model=DEFAULT_MODEL)
+        assert isinstance(result, str)
+        assert len(result) > 0
+        assert text.startswith(result)
 
     def test_type_error_text(self):
         with pytest.raises(TypeError):
-            safe_truncate_tokens(123, max_tokens=5)  # type: ignore
+            safe_truncate_tokens(123, max_tokens=5, model=DEFAULT_MODEL)  # type: ignore
 
     def test_value_error_negative_tokens(self):
         with pytest.raises(ValueError):
-            safe_truncate_tokens("text", max_tokens=-1)
+            safe_truncate_tokens("text", max_tokens=-1, model=DEFAULT_MODEL)
 
     def test_value_error_non_int(self):
         with pytest.raises(ValueError):
-            safe_truncate_tokens("text", max_tokens=3.5)  # type: ignore
+            safe_truncate_tokens("text", max_tokens=3.5, model=DEFAULT_MODEL)  # type: ignore
+
+    def test_type_error_model(self):
+        with pytest.raises(TypeError):
+            safe_truncate_tokens("text", max_tokens=3, model=123)  # type: ignore
 
 
 class TestMergeContextSnippets:
@@ -209,7 +222,7 @@ class TestSplitIntoChunks:
         text = "One two three four five six seven eight"
         chunks = split_into_chunks(text, max_tokens=3)
         assert len(chunks) == 3
-        assert all(estimate_token_count(chunk) <= 3 for chunk in chunks)
+        assert all(estimate_token_count(chunk, model=DEFAULT_MODEL) <= 3 for chunk in chunks)
 
     def test_paragraph_preservation(self):
         text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
@@ -235,7 +248,7 @@ class TestSplitIntoChunks:
         long_para = " ".join([f"word{i}" for i in range(100)])
         chunks = split_into_chunks(long_para, max_tokens=20)
         assert len(chunks) > 1
-        assert all(estimate_token_count(chunk) <= 20 for chunk in chunks)
+        assert all(estimate_token_count(chunk, model=DEFAULT_MODEL) <= 20 for chunk in chunks)
 
     def test_mixed_paragraph_lengths(self):
         text = "Short.\n\n" + " ".join([f"word{i}" for i in range(50)]) + "\n\nAnother short."
@@ -264,7 +277,27 @@ class TestSplitIntoChunks:
         text = "word1 word2 word3 word4"
         chunks = split_into_chunks(text, max_tokens=1)
         assert len(chunks) == 4
-        assert all(estimate_token_count(chunk) == 1 for chunk in chunks)
+        assert all(estimate_token_count(chunk, model=DEFAULT_MODEL) == 1 for chunk in chunks)
+
+    def test_overlap_tokens_are_reused(self):
+        text = "Sentence one. Sentence two. Sentence three."
+        chunks = split_into_chunks(text, max_tokens=4, overlap_tokens=2)
+        assert len(chunks) >= 2
+        assert chunks[1].startswith(chunks[0].split()[0])
+
+    def test_overlap_validation(self):
+        with pytest.raises(ValueError):
+            split_into_chunks("text", max_tokens=10, overlap_tokens=10)
+
+    def test_custom_model(self):
+        text = "Paragraph one. Paragraph two."
+        chunks = split_into_chunks(text, max_tokens=5, overlap_tokens=1, model="claude-3-sonnet")
+        assert len(chunks) >= 1
+
+    def test_multilingual_content(self):
+        text = "你好世界。这是第二句。更多的文本在这里。"
+        chunks = split_into_chunks(text, max_tokens=4, overlap_tokens=1)
+        assert all(isinstance(chunk, str) and chunk for chunk in chunks)
 
 
 class TestSummariseText:
@@ -335,7 +368,7 @@ class TestEdgeCases:
         """Test with very long text (1000+ words)."""
         long_text = " ".join([f"word{i}" for i in range(1000)])
         chunks = split_into_chunks(long_text, max_tokens=100)
-        assert all(estimate_token_count(chunk) <= 100 for chunk in chunks)
+        assert all(estimate_token_count(chunk, model=DEFAULT_MODEL) <= 100 for chunk in chunks)
 
     def test_mixed_languages(self):
         """Test with mixed language text."""
@@ -347,8 +380,8 @@ class TestEdgeCases:
     def test_emoji_handling(self):
         """Test handling of emojis."""
         text = "Hello 👋 World 🌍 Test 🚀"
-        tokens = estimate_token_count(text)
-        assert tokens == 6  # Each word/emoji counts as token
+        tokens = estimate_token_count(text, model=DEFAULT_MODEL)
+        assert tokens >= 4
 
     def test_special_characters(self):
         """Test special characters and symbols."""
@@ -374,8 +407,9 @@ class TestEdgeCases:
     def test_extremely_long_word(self):
         """Test with unreasonably long 'word'."""
         long_word = "a" * 10000
-        result = safe_truncate_tokens(long_word, max_tokens=1)
-        assert result == long_word
+        result = safe_truncate_tokens(long_word, max_tokens=1, model=DEFAULT_MODEL)
+        assert len(result) <= 10
+        assert long_word.startswith(result)
 
     def test_repeated_punctuation(self):
         """Test repeated punctuation."""
@@ -383,3 +417,29 @@ class TestEdgeCases:
         cleaned = clean_text(text)
         assert "Wait..." in cleaned
         assert "what???" in cleaned
+
+
+class TestEstimateLlmCost:
+    """Tests for estimate_llm_cost helper."""
+
+    def test_basic_estimate(self):
+        cost = estimate_llm_cost("Hello world", model="gpt-4o")
+        assert cost > 0
+
+    def test_expected_response_tokens(self):
+        custom_cost = estimate_llm_cost("Hello", model="gpt-3.5-turbo", expected_response_tokens=100)
+        default_cost = estimate_llm_cost("Hello", model="gpt-3.5-turbo")
+        assert custom_cost != default_cost
+
+    def test_override_pricing(self):
+        override = {"custom": {"input": 0.002, "output": 0.004}}
+        cost = estimate_llm_cost("Prompt", model="custom-model", pricing_overrides=override)
+        assert cost > 0
+
+    def test_invalid_model_pricing(self):
+        with pytest.raises(ValueError):
+            estimate_llm_cost("text", model="unknown-model")
+
+    def test_invalid_response_tokens(self):
+        with pytest.raises(ValueError):
+            estimate_llm_cost("text", model="gpt-3.5-turbo", expected_response_tokens=-5)
