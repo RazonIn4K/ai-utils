@@ -4,7 +4,12 @@ ai-utils: A small Python package with helpful AI utility functions.
 
 __version__ = "0.1.0"
 
+import json
+import math
+import os
 import re
+from importlib import resources
+from pathlib import Path
 
 # Import LLMClient if requests is available
 try:
@@ -16,6 +21,173 @@ except ImportError:
 
 # Import additional helpers
 from .helpers import safe_extract_json, configure_logging, retry_with_backoff
+
+_DEFAULT_MODEL = "gpt-3.5-turbo"
+_DEFAULT_CHARS_PER_TOKEN = 4.0
+_MIN_CHARS_PER_TOKEN = 2.5
+_MODEL_CHAR_PER_TOKEN: dict[str, float] = {
+    "gpt-4.1": 3.2,
+    "gpt-4o": 3.4,
+    "gpt-4": 3.7,
+    "gpt-3.5": 4.0,
+    "gpt-3": 4.2,
+    "text-davinci": 4.0,
+    "claude-3": 3.1,
+    "claude-2": 3.3,
+    "claude": 3.4,
+    "command-r": 3.2,
+}
+
+_MODEL_PRICING_USD: dict[str, dict[str, float]] = {
+    "gpt-4.1": {"input": 0.010, "output": 0.030},
+    "gpt-4o": {"input": 0.005, "output": 0.015},
+    "gpt-4": {"input": 0.030, "output": 0.060},
+    "gpt-3.5": {"input": 0.0015, "output": 0.002},
+    "claude-3": {"input": 0.003, "output": 0.015},
+    "claude-2": {"input": 0.008, "output": 0.024},
+    "command-r": {"input": 0.0025, "output": 0.0035},
+    "gpt-4o-mini": {"input": 0.0006, "output": 0.0024},
+}
+
+
+def _load_pricing_config() -> dict[str, dict[str, float]]:
+    env_path = os.environ.get("AI_UTILS_PRICING_CONFIG")
+    paths = []
+    if env_path:
+        paths.append(Path(env_path))
+    try:
+        default_path = resources.files(__package__).joinpath("pricing_config.json")
+        paths.append(Path(str(default_path)))
+    except FileNotFoundError:
+        pass
+
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                models = data.get("models") if isinstance(data, dict) else None
+                if isinstance(models, dict):
+                    return models  # type: ignore[return-value]
+        except Exception:
+            continue
+    return {}
+
+
+_CONFIG_PRICING = _load_pricing_config()
+
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?。！？])\s+|[\r\n]+", re.UNICODE)
+
+
+def _normalized_model_name(model: str) -> str:
+    normalized = model.strip()
+    if not normalized:
+        raise ValueError("model must be a non-empty string")
+    return normalized
+
+
+def _chars_per_token_for_model(model: str) -> float:
+    normalized = model.lower()
+    for prefix, ratio in _MODEL_CHAR_PER_TOKEN.items():
+        if normalized.startswith(prefix):
+            return max(_MIN_CHARS_PER_TOKEN, ratio)
+    return _DEFAULT_CHARS_PER_TOKEN
+
+
+def _pricing_for_model(model: str, pricing_overrides: dict[str, dict[str, float]] | None = None) -> dict[str, float]:
+    lookup: dict[str, dict[str, float]] = {}
+    lookup.update(_MODEL_PRICING_USD)
+    lookup.update(_CONFIG_PRICING)
+    if pricing_overrides:
+        lookup.update(pricing_overrides)
+
+    normalized = model.lower()
+    for prefix, pricing in lookup.items():
+        if normalized.startswith(prefix.lower()):
+            return {
+                "input": max(0.0, pricing.get("input", 0.0)),
+                "output": max(0.0, pricing.get("output", pricing.get("input", 0.0))),
+            }
+    raise ValueError(f"No pricing data available for model '{model}'")
+
+
+def _split_sentences(text: str) -> list[str]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    sentences = [segment.strip() for segment in _SENTENCE_SPLIT_PATTERN.split(stripped) if segment.strip()]
+    return sentences or [stripped]
+
+
+def _truncate_segment(segment: str, token_limit: int, model: str) -> str:
+    if token_limit <= 0 or not segment.strip():
+        return ""
+    words = segment.split()
+    stripped = segment.strip()
+    if words and len(words) > token_limit:
+        return " ".join(words[:token_limit])
+    if words:
+        if len(words) == 1 and words[0] == stripped:
+            approx_chars = max(1, int(token_limit * _chars_per_token_for_model(model)))
+            return stripped[:approx_chars]
+        if estimate_token_count(stripped, model=model) <= token_limit:
+            return stripped
+        approx_chars = max(1, int(token_limit * _chars_per_token_for_model(model)))
+        return stripped[:approx_chars]
+
+    approx_chars = max(1, int(token_limit * _chars_per_token_for_model(model)))
+    return stripped[:approx_chars]
+
+
+def _split_segment_into_chunks(segment: str, max_tokens: int, model: str) -> list[str]:
+    """Split a single sentence/segment into smaller chunks that fit max_tokens."""
+    stripped = segment.strip()
+    if not stripped:
+        return []
+
+    words = stripped.split()
+    if not words or (len(words) == 1 and words[0] == stripped):
+        approx_chars = max(1, int(max_tokens * _chars_per_token_for_model(model)))
+        return [stripped[i : i + approx_chars] for i in range(0, len(stripped), approx_chars)]
+
+    chunks: list[str] = []
+    current_words: list[str] = []
+
+    for word in words:
+        candidate_words = current_words + [word]
+        candidate_text = " ".join(candidate_words)
+        if current_words and estimate_token_count(candidate_text, model=model) > max_tokens:
+            chunks.append(" ".join(current_words))
+            current_words = [word]
+        else:
+            current_words = candidate_words
+
+    if current_words:
+        chunks.append(" ".join(current_words))
+
+    return chunks
+
+
+def _calculate_overlap_segments(segments: list[str], overlap_tokens: int, model: str) -> tuple[list[str], int]:
+    if overlap_tokens <= 0 or not segments:
+        return [], 0
+    overlap_segments: list[str] = []
+    used_tokens = 0
+    for segment in reversed(segments):
+        token_count = estimate_token_count(segment, model=model)
+        if token_count == 0:
+            continue
+        overlap_segments.append(segment)
+        used_tokens += token_count
+        if used_tokens >= overlap_tokens:
+            break
+    overlap_segments.reverse()
+    return overlap_segments, used_tokens
+
+
+def _join_segments(segments: list[str]) -> str:
+    return " ".join(segment.strip() for segment in segments).strip()
 
 
 def clean_text(text: str) -> str:
@@ -46,82 +218,111 @@ def clean_text(text: str) -> str:
     return text
 
 
-def estimate_token_count(text: str) -> int:
+def estimate_token_count(text: str, model: str = _DEFAULT_MODEL) -> int:
     """
-    Estimate the token count of text by splitting on whitespace.
+    Estimate the token count of text using lightweight heuristics.
 
-    This is a simple approximation useful for chunking and processing workflows.
-    It is NOT intended for accurate billing or API quota calculations, as different
-    tokenizers (GPT, Claude, etc.) may count tokens differently.
+    The calculation blends whitespace token counts with an approximate
+    characters-per-token ratio tuned for popular LLM families. The result is
+    sufficient for chunking and guardrail logic without depending on model-
+    specific tokenizers.
 
     Args:
-        text: The input text to estimate tokens for
+        text: The text to estimate tokens for.
+        model: The target model name (used to select a heuristic ratio).
 
     Returns:
-        Approximate token count based on whitespace splitting
+        Estimated token count for the provided model.
 
     Examples:
-        >>> estimate_token_count("Hello world!")
+        >>> estimate_token_count("Hello world!", model="gpt-3.5-turbo")
         2
-        >>> estimate_token_count("This is a test sentence.")
+        >>> estimate_token_count("This is a test sentence.", model="gpt-4o")
         5
-        >>> estimate_token_count("")
+        >>> estimate_token_count("", model="gpt-3.5-turbo")
         0
     """
     if not isinstance(text, str):
         raise TypeError(f"Expected str, got {type(text).__name__}")
 
+    if not isinstance(model, str):
+        raise TypeError(f"model must be str, got {type(model).__name__}")
+
+    normalized_model = _normalized_model_name(model)
+
     if not text.strip():
         return 0
 
-    return len(text.split())
+    whitespace_tokens = len(text.split())
+    chars_per_token = _chars_per_token_for_model(normalized_model.lower())
+    approx_by_chars = max(1, math.ceil(len(text) / chars_per_token))
+
+    return max(whitespace_tokens, approx_by_chars)
 
 
-def safe_truncate_tokens(text: str, max_tokens: int) -> str:
+def safe_truncate_tokens(text: str, max_tokens: int, model: str = _DEFAULT_MODEL) -> str:
     """
-    Safely truncate text to a maximum number of tokens without splitting words.
+    Truncate text to a target token budget while respecting sentence boundaries.
 
-    Uses whitespace-based tokenization as an approximation. The function ensures
-    that words are not cut in the middle by truncating at word boundaries.
-
-    Note: For very long inputs, consider using split_into_chunks() instead, which
-    preserves paragraph structure and is better suited for processing multi-page
-    documents.
+    The function prioritizes returning whole sentences whenever possible. When a
+    single sentence exceeds the budget, it degrades gracefully by truncating on
+    word boundaries (or individual characters for languages without whitespace),
+    guaranteeing that no multi-byte characters are split.
 
     Args:
-        text: The input text to truncate
-        max_tokens: Maximum number of tokens (approximately word-based)
+        text: The text to truncate.
+        max_tokens: Maximum estimated tokens allowed in the result.
+        model: Target model name used for token estimation heuristics.
 
     Returns:
-        Truncated text that respects word boundaries
+        Truncated text that respects sentence and word boundaries where possible.
 
     Examples:
-        >>> safe_truncate_tokens("Hello World! This is a test.", 3)
-        'Hello World! This'
-        >>> safe_truncate_tokens("Short", 10)
+        >>> safe_truncate_tokens("Hello world. Second sentence.", 3, model="gpt-3.5-turbo")
+        'Hello world.'
+        >>> safe_truncate_tokens("Short", 10, model="gpt-3.5-turbo")
         'Short'
-        >>> safe_truncate_tokens("One two three four five", 3)
-        'One two three'
     """
     if not isinstance(text, str):
         raise TypeError(f"Expected str, got {type(text).__name__}")
 
     if not isinstance(max_tokens, int) or max_tokens < 0:
-        raise ValueError(f"max_tokens must be a non-negative integer")
+        raise ValueError("max_tokens must be a non-negative integer")
 
-    if not text or max_tokens == 0:
+    if not isinstance(model, str):
+        raise TypeError(f"model must be str, got {type(model).__name__}")
+
+    normalized_model = _normalized_model_name(model)
+
+    if not text.strip() or max_tokens == 0:
         return ""
 
-    # Split text into tokens (words) while preserving whitespace information
-    tokens = text.split()
+    sentences = _split_sentences(text)
+    truncated_segments: list[str] = []
+    tokens_used = 0
 
-    # If we have fewer tokens than the limit, return original text
-    if len(tokens) <= max_tokens:
-        return text
+    for sentence in sentences:
+        sentence_tokens = estimate_token_count(sentence, model=normalized_model)
+        if sentence_tokens == 0:
+            continue
 
-    # Take only the first max_tokens words and join them back
-    truncated_tokens = tokens[:max_tokens]
-    return ' '.join(truncated_tokens)
+        if tokens_used + sentence_tokens <= max_tokens:
+            truncated_segments.append(sentence)
+            tokens_used += sentence_tokens
+            continue
+
+        remaining = max_tokens - tokens_used
+        if remaining <= 0:
+            break
+        partial = _truncate_segment(sentence, remaining, normalized_model)
+        if partial:
+            truncated_segments.append(partial)
+        break
+
+    if not truncated_segments:
+        return _truncate_segment(text, max_tokens, normalized_model)
+
+    return _join_segments(truncated_segments)
 
 
 def merge_context_snippets(snippets: list[str], separator: str = "\n\n") -> str:
@@ -159,105 +360,154 @@ def merge_context_snippets(snippets: list[str], separator: str = "\n\n") -> str:
     return separator.join(non_empty_snippets)
 
 
-def split_into_chunks(text: str, max_tokens: int) -> list[str]:
+def split_into_chunks(
+    text: str,
+    max_tokens: int,
+    overlap_tokens: int = 0,
+    model: str = _DEFAULT_MODEL,
+) -> list[str]:
     """
-    Split long text into chunks respecting paragraph boundaries when possible.
-
-    This function intelligently splits text by first attempting to split on
-    double-newlines (paragraph breaks). If a paragraph exceeds max_tokens,
-    it falls back to word-based chunking for that paragraph. This preserves
-    natural document structure while ensuring no chunk exceeds the token limit.
-
-    Token counting uses estimate_token_count(), which is whitespace-based.
+    Split text into overlapping chunks sized for RAG and automation workflows.
 
     Args:
-        text: The input text to split into chunks
-        max_tokens: Maximum number of tokens per chunk (estimated)
+        text: Source document or API response to split.
+        max_tokens: Maximum estimated tokens per chunk.
+        overlap_tokens: Tokens to repeat between consecutive chunks for context.
+        model: Target model name used for token estimation.
 
     Returns:
-        List of text chunks, each containing at most max_tokens (estimated)
+        List of chunk strings that include the requested overlap.
 
     Examples:
-        >>> text = "First paragraph here.\\n\\nSecond paragraph here.\\n\\nThird paragraph."
-        >>> chunks = split_into_chunks(text, max_tokens=10)
-        >>> len(chunks)
-        3
-        >>> # If a paragraph is too long, it gets split further
-        >>> long_para = "This is a very long paragraph " * 20
-        >>> chunks = split_into_chunks(long_para, max_tokens=50)
-        >>> all(estimate_token_count(chunk) <= 50 for chunk in chunks)
+        >>> text = "First paragraph. Second paragraph. Third paragraph."
+        >>> chunks = split_into_chunks(text, max_tokens=8, overlap_tokens=2)
+        >>> len(chunks) >= 2
         True
     """
     if not isinstance(text, str):
         raise TypeError(f"Expected str, got {type(text).__name__}")
 
     if not isinstance(max_tokens, int) or max_tokens <= 0:
-        raise ValueError(f"max_tokens must be a positive integer")
+        raise ValueError("max_tokens must be a positive integer")
+
+    if not isinstance(overlap_tokens, int) or overlap_tokens < 0:
+        raise ValueError("overlap_tokens must be a non-negative integer")
+
+    if overlap_tokens >= max_tokens:
+        raise ValueError("overlap_tokens must be smaller than max_tokens")
+
+    if not isinstance(model, str):
+        raise TypeError(f"model must be str, got {type(model).__name__}")
+
+    normalized_model = _normalized_model_name(model)
 
     if not text.strip():
         return []
 
-    # Check if entire text fits in one chunk
-    if estimate_token_count(text) <= max_tokens:
-        return [text]
+    sentences = _split_sentences(text)
+    segments: list[str] = []
+    for sentence in sentences:
+        if not sentence:
+            continue
+        if estimate_token_count(sentence, model=normalized_model) <= max_tokens:
+            segments.append(sentence)
+        else:
+            segments.extend(_split_segment_into_chunks(sentence, max_tokens, normalized_model))
 
-    # Split on double-newlines (paragraph boundaries)
-    paragraphs = text.split('\n\n')
+    chunks: list[str] = []
+    current_segments: list[str] = []
+    current_tokens = 0
 
-    chunks = []
-    current_chunk = []
-    current_token_count = 0
+    def flush_chunk(add_overlap: bool) -> None:
+        nonlocal current_segments, current_tokens
+        if not current_segments:
+            return
+        chunks.append(_join_segments(current_segments))
+        if add_overlap and overlap_tokens > 0:
+            overlap_segments, _ = _calculate_overlap_segments(current_segments, overlap_tokens, normalized_model)
+            current_segments = overlap_segments.copy()
+            current_tokens = sum(
+                estimate_token_count(seg, model=normalized_model) for seg in current_segments
+            )
+        else:
+            current_segments = []
+            current_tokens = 0
 
-    for paragraph in paragraphs:
-        paragraph = paragraph.strip()
-        if not paragraph:
+    for segment in segments:
+        seg_tokens = estimate_token_count(segment, model=normalized_model)
+        if seg_tokens == 0:
             continue
 
-        para_token_count = estimate_token_count(paragraph)
+        if current_tokens + seg_tokens > max_tokens and current_segments:
+            flush_chunk(add_overlap=True)
 
-        # If this single paragraph exceeds max_tokens, split it further
-        if para_token_count > max_tokens:
-            # First, add any accumulated chunk
-            if current_chunk:
-                chunks.append('\n\n'.join(current_chunk))
-                current_chunk = []
-                current_token_count = 0
+        if seg_tokens > max_tokens:
+            smaller_chunks = _split_segment_into_chunks(segment, max_tokens, normalized_model)
+            for small in smaller_chunks:
+                small_tokens = estimate_token_count(small, model=normalized_model)
+                if current_tokens + small_tokens > max_tokens and current_segments:
+                    flush_chunk(add_overlap=True)
+                current_segments.append(small)
+                current_tokens += small_tokens
+                if current_tokens >= max_tokens:
+                    flush_chunk(add_overlap=True)
+            continue
 
-            # Split the long paragraph into word-based chunks
-            words = paragraph.split()
-            word_chunk = []
-            word_count = 0
+        current_segments.append(segment)
+        current_tokens += seg_tokens
 
-            for word in words:
-                if word_count + 1 > max_tokens:
-                    chunks.append(' '.join(word_chunk))
-                    word_chunk = [word]
-                    word_count = 1
-                else:
-                    word_chunk.append(word)
-                    word_count += 1
-
-            if word_chunk:
-                chunks.append(' '.join(word_chunk))
-
-        # If adding this paragraph would exceed limit, start new chunk
-        elif current_token_count + para_token_count > max_tokens:
-            if current_chunk:
-                chunks.append('\n\n'.join(current_chunk))
-            current_chunk = [paragraph]
-            current_token_count = para_token_count
-
-        # Otherwise, add to current chunk
-        else:
-            current_chunk.append(paragraph)
-            current_token_count += para_token_count
-
-    # Add any remaining chunk
-    if current_chunk:
-        chunks.append('\n\n'.join(current_chunk))
+    flush_chunk(add_overlap=False)
 
     return chunks
 
+
+def estimate_llm_cost(
+    text: str,
+    model: str,
+    *,
+    expected_response_tokens: int | None = None,
+    pricing_overrides: dict[str, dict[str, float]] | None = None,
+) -> float:
+    """
+    Estimate the USD cost for a single LLM call.
+
+    Args:
+        text: Prompt text being sent to the model.
+        model: Target model name used for both token estimation and pricing lookup.
+        expected_response_tokens: Optional expected completion tokens. When omitted,
+            a conservative 25%% of the prompt tokens is assumed.
+        pricing_overrides: Optional mapping of model prefixes to ``{"input": x, "output": y}``
+            values expressed in USD per 1K tokens.
+
+    Returns:
+        Estimated dollar cost for the request (prompt + completion).
+
+    Examples:
+        >>> estimate_llm_cost("Hello world", model="gpt-4o")
+        5e-06
+        >>> estimate_llm_cost("Hello", model="custom-model", pricing_overrides={"custom": {"input": 0.002}})
+        2e-06
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"Expected str for text, got {type(text).__name__}")
+
+    if not isinstance(model, str):
+        raise TypeError(f"model must be str, got {type(model).__name__}")
+
+    normalized_model = _normalized_model_name(model)
+    prompt_tokens = estimate_token_count(text, model=normalized_model)
+
+    if expected_response_tokens is not None:
+        if not isinstance(expected_response_tokens, int) or expected_response_tokens < 0:
+            raise ValueError("expected_response_tokens must be a non-negative integer or None")
+        completion_tokens = expected_response_tokens
+    else:
+        completion_tokens = math.ceil(prompt_tokens * 0.25)
+
+    pricing = _pricing_for_model(normalized_model, pricing_overrides)
+    prompt_cost = (prompt_tokens / 1000) * pricing["input"]
+    completion_cost = (completion_tokens / 1000) * pricing["output"]
+    return round(prompt_cost + completion_cost, 8)
 
 def summarise_text(text: str, max_chars: int) -> str:
     """
@@ -343,6 +593,7 @@ __all__ = [
     "safe_truncate_tokens",
     "merge_context_snippets",
     "split_into_chunks",
+    "estimate_llm_cost",
     "summarise_text",
     # LLM integration
     "LLMClient",

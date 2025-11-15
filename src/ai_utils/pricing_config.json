@@ -1,0 +1,12 @@
+{
+  "models": {
+    "gpt-4.1": {"input": 0.010, "output": 0.030},
+    "gpt-4o": {"input": 0.005, "output": 0.015},
+    "gpt-4": {"input": 0.030, "output": 0.060},
+    "gpt-3.5": {"input": 0.0015, "output": 0.0020},
+    "claude-3": {"input": 0.0030, "output": 0.0150},
+    "claude-2": {"input": 0.0080, "output": 0.0240},
+    "command-r": {"input": 0.0025, "output": 0.0035},
+    "gpt-4o-mini": {"input": 0.0006, "output": 0.0024}
+  }
+}
