@@ -11,6 +11,8 @@ from ai_utils import (
     merge_context_snippets,
 )
 
+MODEL = "gpt-3.5-turbo"
+
 
 def main():
     print("=" * 60)
@@ -40,7 +42,7 @@ def main():
         "AI and ML are transforming technology.",
     ]
     for text in texts:
-        count = estimate_token_count(text)
+        count = estimate_token_count(text, model=MODEL)
         print(f"{count:3d} tokens: {text}")
 
     # Example 3: Truncate text safely
@@ -48,8 +50,8 @@ def main():
     print("-" * 60)
     long_text = "The quick brown fox jumps over the lazy dog repeatedly in the forest"
     for max_tokens in [3, 5, 10]:
-        truncated = safe_truncate_tokens(long_text, max_tokens=max_tokens)
-        actual_tokens = estimate_token_count(truncated)
+        truncated = safe_truncate_tokens(long_text, max_tokens=max_tokens, model=MODEL)
+        actual_tokens = estimate_token_count(truncated, model=MODEL)
         print(f"Max {max_tokens} tokens ({actual_tokens} actual): {truncated}")
 
     # Example 4: Merge context snippets
