@@ -4,6 +4,61 @@
 
 A small Python package with helpful AI utility functions for text processing.
 
+**This repo is part of my Upwork portfolio for general automation scripting, token management, and AI workflow utilities.**
+
+---
+
+## 🚀 Quick Demo
+
+**Prerequisites:**
+- Python 3.8+
+- No API keys needed (utilities work offline)
+
+**Run the demo:**
+```bash
+# Install the package
+pip install -e .
+
+# Run the text processing example
+python examples/01_text_processing.py
+```
+
+**Expected Output:**
+```
+============================================================
+TEXT PROCESSING EXAMPLES
+============================================================
+
+1. CLEANING MESSY TEXT
+------------------------------------------------------------
+Original: '\n        This is   some text    with\n\n\n        irregular    spacing...'
+Cleaned: This is some text with irregular spacing and tabs everywhere!
+
+2. ESTIMATING TOKEN COUNTS
+------------------------------------------------------------
+  3 tokens: Hello world!
+ 10 tokens: This is a longer sentence with more words.
+  8 tokens: AI and ML are transforming technology.
+
+3. SAFE TOKEN TRUNCATION
+------------------------------------------------------------
+Max 3 tokens (3 actual): The quick brown
+Max 5 tokens (5 actual): The quick brown fox jumps
+...
+```
+
+**What this proves:**
+- Text cleaning and normalization utilities
+- Token counting for LLM cost estimation
+- Safe truncation for automation guardrails
+- Perfect for general automation scripting jobs where clients need token management and text processing utilities
+
+**Next Steps:**
+- See `examples/` directory for more demos
+- See `docs/upwork/UPWORK_AUTOMATION_SCRIPTS.md` for Upwork summary
+
+---
+
 ## Installation
 
 You can install the package directly from the repository:
